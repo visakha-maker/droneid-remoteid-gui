@@ -1,0 +1,215 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>DroneID Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
+
+    .iconWrap {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.85);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+      border: 1px solid rgba(0,0,0,0.08);
+    }
+
+    .emojiIcon {
+      font-size: 26px;
+      line-height: 1;
+    }
+
+    .droneSvg {
+      width: 30px;
+      height: 30px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+  const map = L.map('map').setView([20, 0], 2);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const droneSvg = `
+    <svg class="droneSvg" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-label="drone">
+      <g fill="#111">
+        <circle cx="16" cy="16" r="7"/>
+        <circle cx="48" cy="16" r="7"/>
+        <circle cx="16" cy="48" r="7"/>
+        <circle cx="48" cy="48" r="7"/>
+        <rect x="28" y="28" width="8" height="8" rx="2"/>
+        <path d="M22 22 L30 30" stroke="#111" stroke-width="4" stroke-linecap="round" fill="none"/>
+        <path d="M42 22 L34 30" stroke="#111" stroke-width="4" stroke-linecap="round" fill="none"/>
+        <path d="M22 42 L30 34" stroke="#111" stroke-width="4" stroke-linecap="round" fill="none"/>
+        <path d="M42 42 L34 34" stroke="#111" stroke-width="4" stroke-linecap="round" fill="none"/>
+      </g>
+    </svg>
+  `;
+
+  const droneIcon = L.divIcon({
+    className: '',
+    html: `<div class="iconWrap">${droneSvg}</div>`,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20]
+  });
+
+  const controllerIcon = L.divIcon({
+    className: '',
+    html: `<div class="iconWrap"><div class="emojiIcon">🎮</div></div>`,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20]
+  });
+
+  const detectorIcon = L.divIcon({
+    className: '',
+    html: `<div class="iconWrap"><div class="emojiIcon">📡</div></div>`,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20]
+  });
+
+  const droneMarkers = {};
+  const controllerMarkers = {};
+  let detectorMarker = null;
+  let selectedTrackKey = null;
+  let selectedLine = null;
+  let centered = false;
+
+  function validLatLon(lat, lon) {
+    if (lat === null || lon === null) return false;
+    if (typeof lat !== 'number' || typeof lon !== 'number') return false;
+    if (!isFinite(lat) || !isFinite(lon)) return false;
+    if (lat === 0 && lon === 0) return false;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
+    return true;
+  }
+
+  function updateDetector(payload) {
+    const lat = payload.detector_lat ?? null;
+    const lon = payload.detector_lon ?? null;
+    if (!validLatLon(lat, lon)) return null;
+
+    if (!detectorMarker) {
+      detectorMarker = L.marker([lat, lon], {icon: detectorIcon})
+        .addTo(map)
+        .bindPopup('ANTSDR / Detector');
+    } else {
+      detectorMarker.setLatLng([lat, lon]);
+    }
+
+    if (!centered) {
+      map.setView([lat, lon], 16);
+      centered = true;
+    }
+
+    return [lat, lon];
+  }
+
+  function updateSelectedLine() {
+    if (!selectedTrackKey || !detectorMarker || !droneMarkers[selectedTrackKey]) {
+      if (selectedLine) {
+        map.removeLayer(selectedLine);
+        selectedLine = null;
+      }
+      return;
+    }
+
+    const det = detectorMarker.getLatLng();
+    const dr = droneMarkers[selectedTrackKey].getLatLng();
+
+    if (!selectedLine) {
+      selectedLine = L.polyline(
+        [[det.lat, det.lng], [dr.lat, dr.lng]],
+        {
+          weight: 5,
+          dashArray: '12,10',
+          color: 'red',
+          opacity: 0.9
+        }
+      ).addTo(map);
+    } else {
+      selectedLine.setLatLngs([[det.lat, det.lng], [dr.lat, dr.lng]]);
+    }
+  }
+
+  function selectTrack(trackKey) {
+    if (!trackKey || trackKey === "None") {
+      selectedTrackKey = null;
+      updateSelectedLine();
+      return;
+    }
+
+    selectedTrackKey = String(trackKey);
+    updateSelectedLine();
+
+    if (droneMarkers[selectedTrackKey]) {
+      map.panTo(droneMarkers[selectedTrackKey].getLatLng());
+    }
+  }
+
+  function updatePoints(payload) {
+    const key = String(
+      payload.track_key ||
+      payload.drone_id ||
+      payload.serial_number ||
+      payload.mac ||
+      payload.device_sn ||
+      payload.drone_sn ||
+      `track-${Date.now()}`
+    );
+
+    const dlat = payload.drone_lat ?? null;
+    const dlon = payload.drone_lon ?? null;
+    const clat = payload.app_lat ?? null;
+    const clon = payload.app_lon ?? null;
+
+    updateDetector(payload);
+
+    if (validLatLon(clat, clon)) {
+      if (!controllerMarkers[key]) {
+        controllerMarkers[key] = L.marker([clat, clon], {icon: controllerIcon})
+          .addTo(map)
+          .bindPopup(`Controller<br>${key}`);
+      } else {
+        controllerMarkers[key].setLatLng([clat, clon]);
+      }
+
+      if (!centered) {
+        map.setView([clat, clon], 16);
+        centered = true;
+      }
+    }
+
+    if (validLatLon(dlat, dlon)) {
+      if (!droneMarkers[key]) {
+        droneMarkers[key] = L.marker([dlat, dlon], {icon: droneIcon})
+          .addTo(map)
+          .bindPopup(`Drone<br>${key}`);
+      } else {
+        droneMarkers[key].setLatLng([dlat, dlon]);
+      }
+
+      if (!centered) {
+        map.setView([dlat, dlon], 16);
+        centered = true;
+      }
+    }
+
+    updateSelectedLine();
+  }
+</script>
+</body>
+</html>
