@@ -24,8 +24,12 @@ class CommandOperationGeofenceController:
         self.detected_table = detected_table
         self.engine = engine
         self.parent = parent
+
         self.latest_results: Dict[str, DroneAlertResult] = {}
         self._map_js_installed = False
+        self._bridge_installing = False
+        self._bridge_retry_count = 0
+        self._pending_fit = False
         self._previous_global_alert = False
 
     def ensure_table_columns(self) -> None:
@@ -60,7 +64,8 @@ class CommandOperationGeofenceController:
 
     def update_map_alert(self, items: Sequence[Dict[str, Any]]) -> None:
         if not self._map_js_installed:
-            self.install_map_bridge()
+            self.install_map_bridge(fit_after=False)
+            return
 
         results = self.latest_results or self.engine.evaluate_items(items)
         active = self.engine.any_active_alert(results)
@@ -100,9 +105,19 @@ class CommandOperationGeofenceController:
             else:
                 item.setBackground(brush)
 
-    def install_map_bridge(self) -> None:
+    def install_map_bridge(self, fit_after: bool = False) -> None:
+        self._pending_fit = self._pending_fit or fit_after
+
         if self._map_js_installed:
+            fit = self._pending_fit
+            self._pending_fit = False
+            QTimer.singleShot(0, lambda: self.render_zones(fit=fit))
             return
+
+        if self._bridge_installing:
+            return
+
+        self._bridge_installing = True
 
         js = r'''
 (function() {
@@ -336,13 +351,31 @@ class CommandOperationGeofenceController:
   };
 })();
 '''
-        self.webview.page().runJavaScript(js)
-        self._map_js_installed = True
-        QTimer.singleShot(100, lambda: self.render_zones(fit=True))
+        self.webview.page().runJavaScript(js, lambda _=None: self._verify_map_bridge())
+
+    def _verify_map_bridge(self) -> None:
+        check_js = "Boolean(window.__cmdopGeoFence && window.__cmdopGeoFence.drawZones && window.__cmdopGeoFence.setAlertState)"
+        self.webview.page().runJavaScript(check_js, self._after_verify_map_bridge)
+
+    def _after_verify_map_bridge(self, ok) -> None:
+        installed = bool(ok)
+        self._map_js_installed = installed
+        self._bridge_installing = False
+
+        if installed:
+            self._bridge_retry_count = 0
+            fit = self._pending_fit
+            self._pending_fit = False
+            QTimer.singleShot(80, lambda: self.render_zones(fit=fit))
+            return
+
+        if self._bridge_retry_count < 5:
+            self._bridge_retry_count += 1
+            QTimer.singleShot(150, lambda: self.install_map_bridge(fit_after=self._pending_fit))
 
     def render_zones(self, fit: bool = False) -> None:
         if not self._map_js_installed:
-            self.install_map_bridge()
+            self.install_map_bridge(fit_after=fit)
             return
 
         payload = self.engine.map_payload()
