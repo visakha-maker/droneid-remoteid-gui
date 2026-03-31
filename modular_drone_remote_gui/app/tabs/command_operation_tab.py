@@ -59,6 +59,7 @@ class CommandOperationTab(QWidget):
 
         self.droneid_tab = None
         self.remoteid_tab = None
+        self._map_ready = False
 
         self.geofence_engine = GeofenceEngine()
         self.geofence_controller = None
@@ -171,11 +172,9 @@ class CommandOperationTab(QWidget):
             parent=self,
         )
 
-        # Important: load the HTML only after the controller exists
         self.web.setHtml(COMMAND_OPERATION_HTML)
 
         self._refresh_detected_dropdown()
-        self._on_detector_changed()
         self.refresh_view()
 
     def attach_sources(self, droneid_tab, remoteid_tab):
@@ -279,30 +278,29 @@ class CommandOperationTab(QWidget):
         track_key = track_key.strip()
         if not track_key or track_key == "None":
             self._update_selected_drone_table(None)
-            self.web.page().runJavaScript("selectTrack(null);")
+            if self._map_ready:
+                self.web.page().runJavaScript("selectTrack(null);")
             return
 
         self._update_selected_drone_table(track_key)
-        self.web.page().runJavaScript(f"selectTrack({json.dumps(track_key)});")
+        if self._map_ready:
+            self.web.page().runJavaScript(f"selectTrack({json.dumps(track_key)});")
 
     def _on_map_loaded(self, ok: bool):
         if not ok:
             return
+
+        self._map_ready = True
+
         if self.geofence_controller is not None:
-            self.geofence_controller.install_map_bridge()
-            try:
-                self.geofence_controller.render_zones(fit=False)
-            except TypeError:
-                self.geofence_controller.render_zones()
+            self.geofence_controller.install_map_bridge(fit_after=False)
+
+        self._on_detector_changed()
         self.refresh_view()
 
     def _on_zones_changed(self):
-        if self.geofence_controller is not None:
-            self.geofence_controller.install_map_bridge()
-            try:
-                self.geofence_controller.render_zones(fit=True)
-            except TypeError:
-                self.geofence_controller.render_zones()
+        if self.geofence_controller is not None and self._map_ready:
+            self.geofence_controller.install_map_bridge(fit_after=True)
         self.refresh_view()
 
     def _apply_geofence_updates(self, items):
@@ -311,9 +309,14 @@ class CommandOperationTab(QWidget):
 
         results = self.geofence_controller.decorate_detected_table(items)
         self.zone_panel.refresh_zone_table(results)
-        self.geofence_controller.update_map_alert(items)
+
+        if self._map_ready:
+            self.geofence_controller.update_map_alert(items)
 
     def _on_detector_changed(self):
+        if not self._map_ready:
+            return
+
         lat, lon, alt = self.detector_state.get_location()
         if lat is None or lon is None:
             self.web.page().runJavaScript("selectTrack(null);")
@@ -329,10 +332,7 @@ class CommandOperationTab(QWidget):
             self.web.page().runJavaScript("selectTrack(null);")
 
         if self.geofence_controller is not None:
-            try:
-                self.geofence_controller.render_zones(fit=False)
-            except TypeError:
-                self.geofence_controller.render_zones()
+            self.geofence_controller.install_map_bridge(fit_after=False)
 
     def refresh_view(self):
         items = self.store.items()
@@ -346,14 +346,17 @@ class CommandOperationTab(QWidget):
 
         self._refresh_detected_dropdown()
 
-        self.web.page().runJavaScript(f"updateCombined({json.dumps(items)});")
+        if self._map_ready:
+            self.web.page().runJavaScript(f"updateCombined({json.dumps(items)});")
 
         selected_key = self.cmb_detected.currentText().strip()
         self._update_selected_drone_table(selected_key if selected_key and selected_key != "None" else None)
-        if selected_key and selected_key != "None":
-            self.web.page().runJavaScript(f"selectTrack({json.dumps(selected_key)});")
-        else:
-            self.web.page().runJavaScript("selectTrack(null);")
+
+        if self._map_ready:
+            if selected_key and selected_key != "None":
+                self.web.page().runJavaScript(f"selectTrack({json.dumps(selected_key)});")
+            else:
+                self.web.page().runJavaScript("selectTrack(null);")
 
         self.table.setRowCount(0)
         for item in items:
