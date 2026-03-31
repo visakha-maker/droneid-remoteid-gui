@@ -30,11 +30,11 @@ class CommandOperationGeofencePanel(QGroupBox):
     ZONE_COLUMNS = [
         "Name",
         "Zone Type",
-        "Date Created",
         "Priority",
-        "Buffer Zone Radius",
+        "Buffer Rad (m)",
         "Enabled",
-        "Drones in Alert Area",
+        "Drones in Alert",
+        "Date Created",
     ]
 
     def __init__(
@@ -59,20 +59,31 @@ class CommandOperationGeofencePanel(QGroupBox):
         form_box = QGroupBox("Zone Properties")
         outer.addWidget(form_box)
         form = QGridLayout(form_box)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
 
         self.zone_type = QComboBox()
         self.zone_type.addItems(["Circular", "Polygon"])
+
         self.zone_name = QLineEdit()
+        self.zone_name.setMinimumWidth(150)
+
         self.priority = QComboBox()
         self.priority.addItems([PRIORITY_HIGH, PRIORITY_LOW])
+
         self.center_lat = QLineEdit()
         self.center_lon = QLineEdit()
         self.zone_radius = QLineEdit()
         self.buffer_radius = QLineEdit()
 
+        self.center_lat.setMinimumWidth(110)
+        self.center_lon.setMinimumWidth(110)
+        self.zone_radius.setMinimumWidth(95)
+        self.buffer_radius.setMinimumWidth(95)
+
         form.addWidget(QLabel("Zone Type"), 0, 0)
         form.addWidget(self.zone_type, 0, 1)
-        form.addWidget(QLabel("Zone_Name"), 0, 2)
+        form.addWidget(QLabel("Zone Name"), 0, 2)
         form.addWidget(self.zone_name, 0, 3)
         form.addWidget(QLabel("Priority Level"), 0, 4)
         form.addWidget(self.priority, 0, 5)
@@ -83,7 +94,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         form.addWidget(self.center_lon, 1, 3)
         form.addWidget(QLabel("Zone Radius (m)"), 1, 4)
         form.addWidget(self.zone_radius, 1, 5)
-        form.addWidget(QLabel("Buffer Zone Radius (m)"), 1, 6)
+        form.addWidget(QLabel("Buffer Radius (m)"), 1, 6)
         form.addWidget(self.buffer_radius, 1, 7)
 
         self.zone_type.currentTextChanged.connect(self._on_zone_type_changed)
@@ -91,10 +102,15 @@ class CommandOperationGeofencePanel(QGroupBox):
         poly_box = QGroupBox("Polygon Points")
         outer.addWidget(poly_box)
         poly_layout = QGridLayout(poly_box)
+        poly_layout.setHorizontalSpacing(8)
+        poly_layout.setVerticalSpacing(6)
+
         self.polygon_rows: List[Tuple[QLineEdit, QLineEdit]] = []
         for idx in range(6):
             lat_edit = QLineEdit()
             lon_edit = QLineEdit()
+            lat_edit.setMinimumWidth(90)
+            lon_edit.setMinimumWidth(90)
             self.polygon_rows.append((lat_edit, lon_edit))
             poly_layout.addWidget(QLabel(f"P{idx + 1} Lat"), idx, 0)
             poly_layout.addWidget(lat_edit, idx, 1)
@@ -104,12 +120,14 @@ class CommandOperationGeofencePanel(QGroupBox):
 
         button_row = QHBoxLayout()
         outer.addLayout(button_row)
+
         self.btn_create = QPushButton("Create Zone")
         self.btn_edit = QPushButton("Edit Zone")
         self.btn_update = QPushButton("Update Zone")
         self.btn_delete = QPushButton("Delete Zone")
         self.btn_save = QPushButton("Save Zones")
         self.btn_load = QPushButton("Load Zones")
+
         for btn in [self.btn_create, self.btn_edit, self.btn_update, self.btn_delete, self.btn_save, self.btn_load]:
             button_row.addWidget(btn)
 
@@ -119,8 +137,21 @@ class CommandOperationGeofencePanel(QGroupBox):
         self.zone_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.zone_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.zone_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.zone_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.zone_table.setMaximumHeight(220)
+
+        header = self.zone_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.zone_table.setColumnWidth(0, 95)
+        self.zone_table.setColumnWidth(1, 95)
+        self.zone_table.setColumnWidth(2, 75)
+        self.zone_table.setColumnWidth(3, 115)
+        self.zone_table.setColumnWidth(4, 90)
+        self.zone_table.setColumnWidth(5, 120)
+        self.zone_table.setColumnWidth(6, 95)
+        header.setStretchLastSection(False)
+
+        self.zone_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.zone_table.setMaximumHeight(175)
+        self.zone_table.setMinimumHeight(175)
         outer.addWidget(self.zone_table)
 
         self.zone_table.itemSelectionChanged.connect(self._populate_from_selected_zone)
@@ -146,8 +177,17 @@ class CommandOperationGeofencePanel(QGroupBox):
             lon_edit.clear()
 
     def _set_form_enabled(self, enabled: bool) -> None:
-        for widget in [self.zone_type, self.zone_name, self.priority, self.center_lat, self.center_lon, self.zone_radius, self.buffer_radius]:
+        for widget in [
+            self.zone_type,
+            self.zone_name,
+            self.priority,
+            self.center_lat,
+            self.center_lon,
+            self.zone_radius,
+            self.buffer_radius,
+        ]:
             widget.setEnabled(enabled)
+
         for lat_edit, lon_edit in self.polygon_rows:
             lat_edit.setEnabled(enabled)
             lon_edit.setEnabled(enabled)
@@ -187,6 +227,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         zone = next((z for z in self.engine.zones if z.zone_id == zone_id), None)
         if not zone:
             return
+
         self.zone_type.setCurrentText(zone.zone_type)
         self.zone_name.setText(zone.name)
         self.priority.setCurrentText(zone.priority)
@@ -194,6 +235,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         self.center_lon.setText("" if zone.center_lon is None else str(zone.center_lon))
         self.zone_radius.setText("" if zone.radius_m is None else str(zone.radius_m))
         self.buffer_radius.setText(str(zone.buffer_radius_m))
+
         for idx, (lat_edit, lon_edit) in enumerate(self.polygon_rows):
             if idx < len(zone.polygon_points):
                 lat_edit.setText(str(zone.polygon_points[idx][0]))
@@ -211,18 +253,23 @@ class CommandOperationGeofencePanel(QGroupBox):
     def _polygon_points_from_form(self) -> List[Tuple[float, float]]:
         points: List[Tuple[float, float]] = []
         found_blank = False
+
         for idx, (lat_edit, lon_edit) in enumerate(self.polygon_rows, start=1):
             lat_text = lat_edit.text().strip()
             lon_text = lon_edit.text().strip()
             has_text = bool(lat_text or lon_text)
+
             if not has_text:
                 found_blank = True
                 continue
+
             if found_blank:
                 raise ZoneValidationError("Polygon rows must be filled sequentially from top to bottom.")
             if not lat_text or not lon_text:
                 raise ZoneValidationError(f"Polygon point {idx} requires both latitude and longitude.")
+
             points.append((float(lat_text), float(lon_text)))
+
         return points
 
     def _zone_from_form(self, existing_id: Optional[str] = None, created_timestamp: Optional[str] = None) -> ExclusionZone:
@@ -236,12 +283,14 @@ class CommandOperationGeofencePanel(QGroupBox):
             buffer_radius_m=float(self.buffer_radius.text().strip() or 0.0),
             created_timestamp=created_timestamp or now_string(),
         )
+
         if zone_type == "Circular":
             zone.center_lat = self._float_or_none(self.center_lat)
             zone.center_lon = self._float_or_none(self.center_lon)
             zone.radius_m = self._float_or_none(self.zone_radius)
         else:
             zone.polygon_points = self._polygon_points_from_form()
+
         return zone
 
     def _selected_zone(self) -> Optional[ExclusionZone]:
@@ -257,6 +306,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         except Exception as exc:
             QMessageBox.warning(self, "Invalid zone", str(exc))
             return
+
         self.refresh_zone_table({})
         self._clear_form()
         self._set_create_mode()
@@ -275,6 +325,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         if not zone or not self.editing_zone_id:
             self._show_selection_prompt()
             return
+
         try:
             updated = self._zone_from_form(existing_id=zone.zone_id, created_timestamp=zone.created_timestamp)
             updated.enabled = zone.enabled
@@ -282,6 +333,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         except Exception as exc:
             QMessageBox.warning(self, "Invalid zone", str(exc))
             return
+
         self.refresh_zone_table({})
         self._clear_form()
         self._set_create_mode()
@@ -292,9 +344,11 @@ class CommandOperationGeofencePanel(QGroupBox):
         if not zone:
             self._show_selection_prompt()
             return
+
         reply = QMessageBox.question(self, "Delete zone", f"Delete zone '{zone.name}'?")
         if reply != QMessageBox.StandardButton.Yes:
             return
+
         self.engine.delete_zone(zone.zone_id)
         self.refresh_zone_table({})
         self._clear_form()
@@ -319,6 +373,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         except Exception as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
             return
+
         self.refresh_zone_table({})
         self._clear_form()
         self._set_create_mode()
@@ -327,19 +382,27 @@ class CommandOperationGeofencePanel(QGroupBox):
     def refresh_zone_table(self, results: Dict[str, DroneAlertResult]) -> None:
         rows = self.engine.build_zone_rows(results)
         self.zone_table.setRowCount(0)
+
         for row_index, row in enumerate(rows):
             self.zone_table.insertRow(row_index)
+
+            created_date = row["created"].split(" ")[0] if row["created"] else ""
+
             name_item = QTableWidgetItem(row["name"])
             name_item.setData(Qt.ItemDataRole.UserRole, row["zone_id"])
             self.zone_table.setItem(row_index, 0, name_item)
             self.zone_table.setItem(row_index, 1, QTableWidgetItem(row["type"]))
-            self.zone_table.setItem(row_index, 2, QTableWidgetItem(row["created"]))
-            self.zone_table.setItem(row_index, 3, QTableWidgetItem(row["priority"]))
-            self.zone_table.setItem(row_index, 4, QTableWidgetItem(row["buffer_radius"]))
+            self.zone_table.setItem(row_index, 2, QTableWidgetItem(row["priority"]))
+            self.zone_table.setItem(row_index, 3, QTableWidgetItem(row["buffer_radius"]))
+
             toggle_btn = QPushButton("Disable" if row["enabled"] else "Enable")
-            toggle_btn.clicked.connect(lambda checked=False, zid=row["zone_id"], enabled=row["enabled"]: self._toggle_enabled(zid, enabled))
-            self.zone_table.setCellWidget(row_index, 5, toggle_btn)
-            self.zone_table.setItem(row_index, 6, QTableWidgetItem(str(row["drones_in_alert_area"])))
+            toggle_btn.clicked.connect(
+                lambda checked=False, zid=row["zone_id"], enabled=row["enabled"]: self._toggle_enabled(zid, enabled)
+            )
+            self.zone_table.setCellWidget(row_index, 4, toggle_btn)
+
+            self.zone_table.setItem(row_index, 5, QTableWidgetItem(str(row["drones_in_alert_area"])))
+            self.zone_table.setItem(row_index, 6, QTableWidgetItem(created_date))
 
     def _toggle_enabled(self, zone_id: str, currently_enabled: bool) -> None:
         self.engine.set_zone_enabled(zone_id, not currently_enabled)
