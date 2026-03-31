@@ -2,11 +2,12 @@ import json
 from typing import Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox, QFormLayout,
     QPushButton, QMessageBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QDialog, QDialogButtonBox, QLineEdit, QComboBox,
-    QSizePolicy, QScrollArea
+    QSizePolicy
 )
 
 from app.maps import COMMAND_OPERATION_HTML
@@ -59,7 +60,6 @@ class CommandOperationTab(QWidget):
 
         self.droneid_tab = None
         self.remoteid_tab = None
-        self._map_ready = False
 
         self.geofence_engine = GeofenceEngine()
         self.geofence_controller = None
@@ -79,13 +79,15 @@ class CommandOperationTab(QWidget):
         combo_row.addWidget(self.cmb_detected, 1)
         summary_layout.addLayout(combo_row)
 
-        self.selected_table = QTableWidget(1, 5)
+        self.selected_table = QTableWidget(1, 7)
         self.selected_table.setHorizontalHeaderLabels([
             "Drone Lat",
             "Drone Lon",
             "Altitude",
-            "Detector→Drone Distance (m)",
-            "Detector→Drone Angle (°T)"
+            "Det→Drone Dist (m)",
+            "Det→Drone Angle (°T)",
+            "Breached Zone",
+            "Alert State",
         ])
         self.selected_table.verticalHeader().setVisible(False)
         self.selected_table.setAlternatingRowColors(False)
@@ -93,13 +95,19 @@ class CommandOperationTab(QWidget):
         self.selected_table.setEditTriggers(self.selected_table.EditTrigger.NoEditTriggers)
 
         selected_header = self.selected_table.horizontalHeader()
-        selected_header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        selected_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.selected_table.setColumnWidth(0, 90)
+        self.selected_table.setColumnWidth(1, 90)
+        self.selected_table.setColumnWidth(2, 75)
+        self.selected_table.setColumnWidth(3, 125)
+        self.selected_table.setColumnWidth(4, 135)
+        self.selected_table.setColumnWidth(5, 120)
+        self.selected_table.setColumnWidth(6, 95)
         selected_header.setStretchLastSection(True)
 
-        self.selected_table.resizeColumnsToContents()
         self.selected_table.setWordWrap(True)
-        self.selected_table.setMaximumHeight(90)
-        self.selected_table.setMinimumHeight(90)
+        self.selected_table.setMaximumHeight(92)
+        self.selected_table.setMinimumHeight(92)
         self.selected_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         summary_layout.addWidget(self.selected_table)
 
@@ -138,6 +146,8 @@ class CommandOperationTab(QWidget):
         btn_box.addStretch(1)
 
         right = QVBoxLayout()
+        right.setContentsMargins(8, 8, 8, 8)
+        right.setSpacing(6)
         right.addLayout(btn_box)
         right.addWidget(summary_box)
 
@@ -154,15 +164,11 @@ class CommandOperationTab(QWidget):
         right_widget = QWidget()
         right_widget.setLayout(right)
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setWidget(right_widget)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
         root = QHBoxLayout()
-        root.addWidget(self.web, 1)
-        root.addWidget(right_scroll, 1)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
+        root.addWidget(self.web, 4)
+        root.addWidget(right_widget, 6)
         self.setLayout(root)
 
         self.geofence_controller = CommandOperationGeofenceController(
@@ -175,6 +181,7 @@ class CommandOperationTab(QWidget):
         self.web.setHtml(COMMAND_OPERATION_HTML)
 
         self._refresh_detected_dropdown()
+        self._on_detector_changed()
         self.refresh_view()
 
     def attach_sources(self, droneid_tab, remoteid_tab):
@@ -250,8 +257,30 @@ class CommandOperationTab(QWidget):
             self.cmb_detected.setCurrentIndex(0)
         self.cmb_detected.blockSignals(False)
 
+    def _apply_selected_table_colour(self, color_name: Optional[str]):
+        brush = None
+        if color_name == "buffer":
+            brush = QBrush(QColor(255, 235, 59, 120))
+        elif color_name == "low":
+            brush = QBrush(QColor(255, 165, 0, 120))
+        elif color_name == "high":
+            brush = QBrush(QColor(255, 0, 0, 110))
+
+        for col in range(self.selected_table.columnCount()):
+            item = self.selected_table.item(0, col)
+            if item is None:
+                item = QTableWidgetItem("")
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                self.selected_table.setItem(0, col, item)
+            if brush is None:
+                item.setBackground(QBrush())
+            else:
+                item.setBackground(brush)
+
     def _update_selected_drone_table(self, track_key: Optional[str]):
-        values = ["", "", "", "", ""]
+        values = ["", "", "", "", "", "", ""]
+        row_color_name = None
+
         if track_key and track_key != "None":
             for item in self.store.items():
                 if str(item.get("key")) == track_key:
@@ -260,47 +289,64 @@ class CommandOperationTab(QWidget):
                     drone_alt = item.get("drone_alt")
                     dist, ang = self._distance_and_bearing(drone_lat, drone_lon)
 
+                    breached_zone = ""
+                    alert_state = ""
+                    if self.geofence_controller is not None:
+                        result = self.geofence_controller.result_for_key(track_key)
+                        breached_zone = result.breached_zone_name
+                        alert_state = result.alert_state
+                        row_color_name = result.row_color_name
+
                     values = [
                         self._f(drone_lat),
                         self._f(drone_lon),
                         self._f2(drone_alt),
                         "" if dist is None else f"{dist:.1f}",
                         "" if ang is None else f"{ang:.1f}",
+                        breached_zone,
+                        alert_state,
                     ]
                     break
 
         for col, text in enumerate(values):
-            cell = QTableWidgetItem(text)
-            cell.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            self.selected_table.setItem(0, col, cell)
+            cell = self.selected_table.item(0, col)
+            if cell is None:
+                cell = QTableWidgetItem(text)
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                self.selected_table.setItem(0, col, cell)
+            else:
+                cell.setText(text)
+
+        self._apply_selected_table_colour(row_color_name)
 
     def on_selected_drone_changed(self, track_key: str):
         track_key = track_key.strip()
         if not track_key or track_key == "None":
             self._update_selected_drone_table(None)
-            if self._map_ready:
-                self.web.page().runJavaScript("selectTrack(null);")
+            self.web.page().runJavaScript("selectTrack(null);")
             return
 
         self._update_selected_drone_table(track_key)
-        if self._map_ready:
-            self.web.page().runJavaScript(f"selectTrack({json.dumps(track_key)});")
+        self.web.page().runJavaScript(f"selectTrack({json.dumps(track_key)});")
 
     def _on_map_loaded(self, ok: bool):
         if not ok:
             return
-
-        self._map_ready = True
-
         if self.geofence_controller is not None:
-            self.geofence_controller.install_map_bridge(fit_after=False)
-
-        self._on_detector_changed()
+            self.geofence_controller.install_map_bridge()
+            try:
+                self.geofence_controller.render_zones(fit=False)
+            except TypeError:
+                self.geofence_controller.render_zones()
         self.refresh_view()
 
     def _on_zones_changed(self):
-        if self.geofence_controller is not None and self._map_ready:
-            self.geofence_controller.install_map_bridge(fit_after=True)
+        if self.geofence_controller is not None:
+            self.geofence_controller.install_map_bridge()
+            try:
+                self.geofence_controller.render_zones(fit=True)
+            except TypeError:
+                self.geofence_controller.render_zones()
         self.refresh_view()
 
     def _apply_geofence_updates(self, items):
@@ -309,14 +355,12 @@ class CommandOperationTab(QWidget):
 
         results = self.geofence_controller.decorate_detected_table(items)
         self.zone_panel.refresh_zone_table(results)
+        self.geofence_controller.update_map_alert(items)
 
-        if self._map_ready:
-            self.geofence_controller.update_map_alert(items)
+        selected_key = self.cmb_detected.currentText().strip()
+        self._update_selected_drone_table(selected_key if selected_key and selected_key != "None" else None)
 
     def _on_detector_changed(self):
-        if not self._map_ready:
-            return
-
         lat, lon, alt = self.detector_state.get_location()
         if lat is None or lon is None:
             self.web.page().runJavaScript("selectTrack(null);")
@@ -332,7 +376,10 @@ class CommandOperationTab(QWidget):
             self.web.page().runJavaScript("selectTrack(null);")
 
         if self.geofence_controller is not None:
-            self.geofence_controller.install_map_bridge(fit_after=False)
+            try:
+                self.geofence_controller.render_zones(fit=False)
+            except TypeError:
+                self.geofence_controller.render_zones()
 
     def refresh_view(self):
         items = self.store.items()
@@ -346,17 +393,14 @@ class CommandOperationTab(QWidget):
 
         self._refresh_detected_dropdown()
 
-        if self._map_ready:
-            self.web.page().runJavaScript(f"updateCombined({json.dumps(items)});")
+        self.web.page().runJavaScript(f"updateCombined({json.dumps(items)});")
 
         selected_key = self.cmb_detected.currentText().strip()
         self._update_selected_drone_table(selected_key if selected_key and selected_key != "None" else None)
-
-        if self._map_ready:
-            if selected_key and selected_key != "None":
-                self.web.page().runJavaScript(f"selectTrack({json.dumps(selected_key)});")
-            else:
-                self.web.page().runJavaScript("selectTrack(null);")
+        if selected_key and selected_key != "None":
+            self.web.page().runJavaScript(f"selectTrack({json.dumps(selected_key)});")
+        else:
+            self.web.page().runJavaScript("selectTrack(null);")
 
         self.table.setRowCount(0)
         for item in items:
