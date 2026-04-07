@@ -24,8 +24,12 @@ class CommandOperationGeofenceController:
         self.detected_table = detected_table
         self.engine = engine
         self.parent = parent
+
         self.latest_results: Dict[str, DroneAlertResult] = {}
         self._map_js_installed = False
+        self._bridge_installing = False
+        self._bridge_retry_count = 0
+        self._pending_fit = False
         self._previous_global_alert = False
 
     def result_for_key(self, drone_key: Optional[str]) -> DroneAlertResult:
@@ -44,7 +48,8 @@ class CommandOperationGeofenceController:
 
     def update_map_alert(self, items: Sequence[Dict[str, Any]]) -> None:
         if not self._map_js_installed:
-            self.install_map_bridge()
+            self.install_map_bridge(fit_after=False)
+            return
 
         results = self.latest_results or self.engine.evaluate_items(items)
         active = self.engine.any_active_alert(results)
@@ -76,13 +81,23 @@ class CommandOperationGeofenceController:
             else:
                 item.setBackground(brush)
 
-    def install_map_bridge(self) -> None:
+    def install_map_bridge(self, fit_after: bool = False) -> None:
+        self._pending_fit = self._pending_fit or fit_after
+
         if self._map_js_installed:
+            fit = self._pending_fit
+            self._pending_fit = False
+            QTimer.singleShot(0, lambda: self.render_zones(fit=fit))
             return
 
+        if self._bridge_installing:
+            return
+
+        self._bridge_installing = True
+
         js = r'''
-(function() {
-  if (window.__cmdopGeoFence || typeof map === 'undefined' || typeof L === 'undefined') return;
+ (function() {       
+ if (window.__cmdopGeoFence || typeof map === 'undefined' || typeof L === 'undefined') return;
 
   function localProjector(lat0, lon0) {
     const R = 6371008.8;
@@ -167,32 +182,186 @@ class CommandOperationGeofenceController:
     div.style.fontWeight = '700';
     div.style.borderRadius = '6px';
     div.style.boxShadow = '0 2px 8px rgba(0,0,0,0.22)';
-    div.style.minWidth = '110px';
-    div.style.textAlign = 'center';
-    div.textContent = 'Alert: Clear';
+    div.style.minWidth = '175px';
+    div.style.display = 'flex';
+    div.style.alignItems = 'center';
+    div.style.justifyContent = 'space-between';
+    div.style.gap = '8px';
+
+    const label = document.createElement('span');
+    label.id = 'cmdop-alert-label';
+    label.textContent = 'Alert: Clear';
+
+    const btn = document.createElement('button');
+    btn.id = 'cmdop-alert-mute-btn';
+    btn.textContent = 'Mute';
+    btn.style.border = '1px solid rgba(0,0,0,0.2)';
+    btn.style.borderRadius = '4px';
+    btn.style.padding = '2px 8px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontWeight = '600';
+    btn.style.background = 'rgba(255,255,255,0.95)';
+    btn.style.color = '#111';
+
+    div.appendChild(label);
+    div.appendChild(btn);
+
+    L.DomEvent.disableClickPropagation(div);
     return div;
   };
   alertControl.addTo(map);
 
   let blinkTimer = null;
+  let beepTimer = null;
+  let audioCtx = null;
+  let muted = false;
+  let alertActive = false;
+  let audioUnlocked = false;
+  let audioUnlockHandlersInstalled = false;
+
+  function ensureAudioContext() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      if (!audioCtx) audioCtx = new Ctx();
+      return audioCtx;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function updateMuteButton() {
+    const btn = document.getElementById('cmdop-alert-mute-btn');
+    if (!btn) return;
+    btn.textContent = muted ? 'Unmute' : 'Mute';
+    btn.style.background = muted ? 'rgba(255,235,59,0.95)' : 'rgba(255,255,255,0.95)';
+    btn.style.color = '#111';
+  }
+
+  function stopBeeping() {
+    if (beepTimer) {
+      clearInterval(beepTimer);
+      beepTimer = null;
+    }
+  }
+
+  function playBeep(durationSec, frequencyHz, gainValue) {
+    if (!audioUnlocked) return;
+
+    const ctx = ensureAudioContext();
+    if (!ctx || ctx.state !== 'running') return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.value = frequencyHz;
+    gain.gain.setValueAtTime(0.0001, now);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    const start = now;
+    const end = start + durationSec;
+
+    gain.gain.exponentialRampToValueAtTime(gainValue, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+    osc.start(start);
+    osc.stop(end + 0.03);
+  }
+
+  function startBeeping() {
+    if (muted || !alertActive || beepTimer || !audioUnlocked) return;
+
+    playBeep(0.18, 950, 0.08);
+    beepTimer = setInterval(function() {
+      if (!alertActive || muted || !audioUnlocked) {
+        stopBeeping();
+        return;
+      }
+      playBeep(0.18, 950, 0.08);
+    }, 850);
+  }
+
+  function unlockAudio() {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+
+    ctx.resume().then(function() {
+      audioUnlocked = (ctx.state === 'running');
+      if (audioUnlocked && alertActive && !muted) {
+        startBeeping();
+      }
+    }).catch(function() {
+      audioUnlocked = false;
+    });
+  }
+
+  function installAudioUnlockHandlers() {
+    if (audioUnlockHandlersInstalled) return;
+    audioUnlockHandlersInstalled = true;
+
+    const handler = function() {
+      unlockAudio();
+    };
+
+    document.addEventListener('pointerdown', handler, { passive: true });
+    document.addEventListener('keydown', handler, { passive: true });
+    document.addEventListener('touchstart', handler, { passive: true });
+  }
+
+  function installMuteHandler() {
+    const btn = document.getElementById('cmdop-alert-mute-btn');
+    if (!btn || btn.dataset.bound === '1') return;
+
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', function() {
+      unlockAudio();
+      muted = !muted;
+      updateMuteButton();
+
+      if (muted) {
+        stopBeeping();
+      } else if (alertActive) {
+        startBeeping();
+      }
+    });
+  }
+
+  installAudioUnlockHandlers();
 
   function setAlertState(state) {
     const el = document.getElementById('cmdop-alert-indicator');
-    if (!el) return;
+    const label = document.getElementById('cmdop-alert-label');
+    installMuteHandler();
+    updateMuteButton();
+
+    if (!el || !label) return;
 
     if (!state || !state.active) {
+      alertActive = false;
+      stopBeeping();
+
       if (blinkTimer) {
         clearInterval(blinkTimer);
         blinkTimer = null;
       }
-      el.textContent = 'Alert: Clear';
+
+      label.textContent = 'Alert: Clear';
       el.style.background = 'rgba(255,255,255,0.92)';
-      el.style.color = '#111';
+      label.style.color = '#111';
       return;
     }
 
-    el.textContent = 'Alert: ACTIVE';
-    el.style.color = '#fff';
+    alertActive = true;
+    label.textContent = 'Alert: ACTIVE';
+    label.style.color = '#fff';
+
+    if (!muted) {
+      startBeeping();
+    }
 
     if (state.entering) {
       let on = true;
@@ -208,7 +377,9 @@ class CommandOperationGeofenceController:
           clearInterval(blinkTimer);
           blinkTimer = null;
         }
-        el.style.background = 'rgba(220,0,0,0.95)';
+        if (alertActive) {
+          el.style.background = 'rgba(220,0,0,0.95)';
+        }
       }, 2200);
     } else {
       if (blinkTimer) {
@@ -312,13 +483,31 @@ class CommandOperationGeofenceController:
   };
 })();
 '''
-        self.webview.page().runJavaScript(js)
-        self._map_js_installed = True
-        QTimer.singleShot(100, lambda: self.render_zones(fit=True))
+        self.webview.page().runJavaScript(js, lambda _=None: self._verify_map_bridge())
+
+    def _verify_map_bridge(self) -> None:
+        check_js = "Boolean(window.__cmdopGeoFence && window.__cmdopGeoFence.drawZones && window.__cmdopGeoFence.setAlertState)"
+        self.webview.page().runJavaScript(check_js, self._after_verify_map_bridge)
+
+    def _after_verify_map_bridge(self, ok) -> None:
+        installed = bool(ok)
+        self._map_js_installed = installed
+        self._bridge_installing = False
+
+        if installed:
+            self._bridge_retry_count = 0
+            fit = self._pending_fit
+            self._pending_fit = False
+            QTimer.singleShot(80, lambda: self.render_zones(fit=fit))
+            return
+
+        if self._bridge_retry_count < 5:
+            self._bridge_retry_count += 1
+            QTimer.singleShot(150, lambda: self.install_map_bridge(fit_after=self._pending_fit))
 
     def render_zones(self, fit: bool = False) -> None:
         if not self._map_js_installed:
-            self.install_map_bridge()
+            self.install_map_bridge(fit_after=fit)
             return
 
         payload = self.engine.map_payload()
