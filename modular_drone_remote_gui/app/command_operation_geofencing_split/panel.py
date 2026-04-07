@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -29,12 +30,12 @@ from .models import DroneAlertResult, ExclusionZone
 class CommandOperationGeofencePanel(QGroupBox):
     ZONE_COLUMNS = [
         "Name",
-        "Zone Type",
+        "Type",
         "Priority",
-        "Buffer Rad (m)",
+        "Buffer (m)",
         "Enabled",
-        "Drones in Alert",
-        "Date Created",
+        "Drones Alert",
+        "Date",
     ]
 
     def __init__(
@@ -66,7 +67,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         self.zone_type.addItems(["Circular", "Polygon"])
 
         self.zone_name = QLineEdit()
-        self.zone_name.setMinimumWidth(150)
+        self.zone_name.setMinimumWidth(135)
 
         self.priority = QComboBox()
         self.priority.addItems([PRIORITY_HIGH, PRIORITY_LOW])
@@ -78,8 +79,8 @@ class CommandOperationGeofencePanel(QGroupBox):
 
         self.center_lat.setMinimumWidth(110)
         self.center_lon.setMinimumWidth(110)
-        self.zone_radius.setMinimumWidth(95)
-        self.buffer_radius.setMinimumWidth(95)
+        self.zone_radius.setMinimumWidth(88)
+        self.buffer_radius.setMinimumWidth(88)
 
         form.addWidget(QLabel("Zone Type"), 0, 0)
         form.addWidget(self.zone_type, 0, 1)
@@ -109,8 +110,8 @@ class CommandOperationGeofencePanel(QGroupBox):
         for idx in range(6):
             lat_edit = QLineEdit()
             lon_edit = QLineEdit()
-            lat_edit.setMinimumWidth(90)
-            lon_edit.setMinimumWidth(90)
+            lat_edit.setMinimumWidth(88)
+            lon_edit.setMinimumWidth(88)
             self.polygon_rows.append((lat_edit, lon_edit))
             poly_layout.addWidget(QLabel(f"P{idx + 1} Lat"), idx, 0)
             poly_layout.addWidget(lat_edit, idx, 1)
@@ -140,18 +141,21 @@ class CommandOperationGeofencePanel(QGroupBox):
 
         header = self.zone_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.zone_table.setColumnWidth(0, 95)
-        self.zone_table.setColumnWidth(1, 95)
-        self.zone_table.setColumnWidth(2, 75)
-        self.zone_table.setColumnWidth(3, 115)
-        self.zone_table.setColumnWidth(4, 90)
-        self.zone_table.setColumnWidth(5, 120)
-        self.zone_table.setColumnWidth(6, 95)
+        self.zone_table.setColumnWidth(0, 90)
+        self.zone_table.setColumnWidth(1, 80)
+        self.zone_table.setColumnWidth(2, 72)
+        self.zone_table.setColumnWidth(3, 95)
+        self.zone_table.setColumnWidth(4, 85)
+        self.zone_table.setColumnWidth(5, 105)
+        self.zone_table.setColumnWidth(6, 88)
         header.setStretchLastSection(False)
 
-        self.zone_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.zone_table.setMaximumHeight(175)
-        self.zone_table.setMinimumHeight(175)
+        self.zone_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.zone_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.zone_table.setMinimumHeight(148)
+        self.zone_table.setMaximumHeight(148)
+        self.zone_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
         outer.addWidget(self.zone_table)
 
         self.zone_table.itemSelectionChanged.connect(self._populate_from_selected_zone)
@@ -224,6 +228,7 @@ class CommandOperationGeofencePanel(QGroupBox):
         zone_id = self._selected_zone_id()
         if not zone_id:
             return
+
         zone = next((z for z in self.engine.zones if z.zone_id == zone_id), None)
         if not zone:
             return
